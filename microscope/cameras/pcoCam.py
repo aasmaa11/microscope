@@ -216,14 +216,5 @@ class pcoPandaCamera(
         #pco.Camera().configurations are stored in a dictionary
         
         self.myCam.default_configuration()
-        self.myCam.configuration = {'exposure time': 10e-3,
-                                    'delay time': 0,
-                                    'roi': (1, 1, 512, 512),
-                                    'timestamp': 'ascii',
-                                    'pixel rate': 100_000_000,
-                                    'trigger': 'auto sequence',
-                                    'acquire': 'auto',
-                                    'noise filter': 'on',
-                                    'metadata': 'on',
-                                    'binning': (1, 1)}
+        
 
