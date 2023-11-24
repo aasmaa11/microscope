@@ -1,6 +1,7 @@
 import logging
 import queue
 import time
+import typing
 
 import numpy as np
 
@@ -11,10 +12,12 @@ import ctypes as C
 import numpy as np
 import os
 
+import Pyro4
 
 
+#microscope.abc.FloatingDeviceMixin,
 class pcoPandaCamera(
-    microscope.abc.FloatingDeviceMixin, microscope.abc.Camera,
+     microscope.abc.Camera
     ):    
     def __init__(self, index=0, **kwargs):
         super().__init__(index=index, **kwargs)
@@ -23,6 +26,10 @@ class pcoPandaCamera(
         #will need to init those two later after the first capture
         self.imageBuffer = None
         self.imageMetaData = None
+        self.cycleTime = 0.0
+        self.roi = microscope.ROI(None, None, None, None)
+        self.binning = microscope.Binning(1, 1)
+        self.newInBuffer = True
         
 
     @microscope.abc.keep_acquiring
@@ -43,11 +50,7 @@ class pcoPandaCamera(
         imagery. This is different from delay time: which represents the amount of time between
         captures
         """
-        
-        """
-        Pass for now
-        """
-        pass
+        return self.cycleTime
 
     #may need to import pco.sdk if this doesn't work
     def _get_sensor_shape(self) -> typing.Tuple[int, int]:
@@ -70,7 +73,7 @@ class pcoPandaCamera(
         """Set binning along both axes.  Return `True` if successful."""
         #break down the arg for type casting
         h, v = binning 
-        self.myCam.configuration['binning'] = (h, v)
+        self.myCam.configuration= {'binning' : (h, v)}
         if (self._get_binning == binning):
             return True
         else:
@@ -78,12 +81,16 @@ class pcoPandaCamera(
         
     
     def _get_roi(self) -> microscope.ROI:
-        left, top, width, height = self.myCam.configuration['roi']
+        left, top, width, height = self.roi
         return microscope.ROI(left, top, width, height)
     
     def _set_roi(self, roi: microscope.ROI):
         """Set the ROI on the hardware.  Return `True` if successful."""
-        self.myCam.configuration['roi'] = roi
+        #roi=(1,1,300,300)
+        left, top, width, height = roi
+        self.myCam.configuration = {'roi': (left, top, width, height)}
+        self.roi = roi
+        #self.myCam.configuration['roi'] = roi
         
         if (self._get_roi == roi):
             return True
@@ -106,9 +113,11 @@ class pcoPandaCamera(
         if self.myCam.is_recording:
             self.myCam.stop()
             self._acquiring = False
-        
+
+    def soft_trigger(self) -> None:
+        self.trigger()
     
-    def _fetch_data(self) -> None:
+    def _fetch_data(self):
         """Poll for data and return it, with minimal processing.
 
         If the device uses buffering in software, this function should
@@ -119,8 +128,21 @@ class pcoPandaCamera(
         data is available, return `None`.
 
         """
-        
-        image, metadata = self.myCam.image()
+        #if not self._acquiring:
+            #return None
+        try:
+            #self.myCam.record(number_of_images=1, mode='sequence')
+            #print("FETCHING DATA FROM PCO HANDLER")
+            if (not self.newInBuffer):
+                raise Exception
+            else:
+                self.newInBuffer = False
+            
+            image, metadata = self.myCam.image()
+            print(image)
+            
+        except Exception as e:
+            return None
         """
         So the pco library comes with two ways to fetch the image(s) respectively called
         image() and images(). image() will only consider the most recent image while images()
@@ -132,7 +154,7 @@ class pcoPandaCamera(
         
         return image
     
-    @keep_acquiring
+    #@keep_acquiring
     def update_settings(self, settings, init: bool = False) -> None:
         """Update settings, toggling acquisition if necessary."""
         super().update_settings(settings, init)
@@ -142,16 +164,6 @@ class pcoPandaCamera(
         return self.myCam.camera_serial
     
     #TODO: implement
-    @property
-    def trigger_mode(self) -> microscope.TriggerMode:
-        raise NotImplementedError()
-
-    #TODO: implement
-    @property
-    def trigger_type(self) -> microscope.TriggerType:
-        raise NotImplementedError()
-
-    #TODO: implement
     def set_trigger(
         self, ttype: microscope.TriggerType, tmode: microscope.TriggerMode
     ) -> None:
@@ -159,7 +171,8 @@ class pcoPandaCamera(
         """
         raise NotImplementedError()
 
-    def _do_trigger(self) -> None:
+    
+    def _do_trigger(self):
         """Actual trigger of the device.
 
         Classes implementing this interface should implement this
@@ -168,7 +181,9 @@ class pcoPandaCamera(
         """
         #At the moment I do not see any reason to use other modes
         #Maybe we can consider taking multiple images
+        print("In do Trigger")
         self.myCam.record(number_of_images=1, mode='sequence')
+        self.newInBuffer = True
         #raise NotImplementedError()
         
     
@@ -214,7 +229,25 @@ class pcoPandaCamera(
         """
         #We create the object in init and then call initialize to set default configuration
         #pco.Camera().configurations are stored in a dictionary
-        
         self.myCam.default_configuration()
+
+        self.roi = microscope.ROI(
+            left=1,
+            top=1,
+            width=512,
+            height=512,
+        )
+        self.myCam.configuration = {'roi': (1, 1, 512, 512)}
+
+
+    #TODO: implement
+    @property
+    def trigger_mode(self) -> microscope.TriggerMode:
+        raise NotImplementedError()
+
+    #TODO: implement
+    @property
+    def trigger_type(self) -> microscope.TriggerType:
+        return microscope.TriggerType.SOFTWARE
         
 
