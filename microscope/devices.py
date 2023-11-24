@@ -22,6 +22,10 @@
 
 from microscope import ROI, AxisLimits, Binning, TriggerMode, TriggerType
 from microscope.abc import (
+    TRIGGER_AFTER,
+    TRIGGER_BEFORE,
+    TRIGGER_DURATION,
+    TRIGGER_SOFT,
     Camera as CameraDevice,
     Controller as ControllerDevice,
     DataDevice,

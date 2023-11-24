@@ -29,6 +29,7 @@ import queue
 import threading
 import time
 import typing
+from ast import literal_eval
 from enum import EnumMeta
 from threading import Thread
 
@@ -40,6 +41,9 @@ import microscope
 
 _logger = logging.getLogger(__name__)
 
+
+# Trigger types.
+(TRIGGER_AFTER, TRIGGER_BEFORE, TRIGGER_DURATION, TRIGGER_SOFT) = range(4)
 
 # Mapping of setting data types descriptors to allowed-value types.
 #
@@ -188,31 +192,12 @@ class FloatingDeviceMixin(metaclass=abc.ABCMeta):
     """A mixin for devices that 'float'.
 
     Some SDKs handling multiple devices do not allow for explicit
-    selection of a specific device.  Instead, when the SDK is
-    initialised it assigns an index to each device.  However, this
-    index is only unique until the program ends and next time the
-    program runs the device might be assigned a different index.  This
-    means that it is not possible to request a specific device to the
-    SDK.  Instead, one connects to one of the available devices, then
-    initialises it, and only then can one check which one we got.
-
-    Floating devices are a problem in systems where there are multiple
-    devices of the same type but we only want to initialise a subset
-    of them.  Make sure that a device really is a floating device
-    before making use of this class.  Avoid it if possible.
-
-    This class is a mixin which enforces the implementation of a
-    `get_id` method, which typically returns the device serial number.
-
-    Args:
-        index: the index of the device on a shared library.  This
-            argument is added by the device_server program.
+    selection of a specific device.  Instead, a device must be
+    initialized and then queried to determine its ID. This class is a
+    mixin which identifies a subclass as floating, and enforces the
+    implementation of a `get_id` method.
 
     """
-
-    def __init__(self, index: int, **kwargs) -> None:
-        super().__init__(**kwargs)
-        self._index = index
 
     @abc.abstractmethod
     def get_id(self) -> str:
@@ -246,7 +231,8 @@ class TriggerTargetMixin(metaclass=abc.ABCMeta):
     def set_trigger(
         self, ttype: microscope.TriggerType, tmode: microscope.TriggerMode
     ) -> None:
-        """Set device for a specific trigger."""
+        """Set device for a specific trigger.
+        """
         raise NotImplementedError()
 
     @abc.abstractmethod
@@ -254,7 +240,7 @@ class TriggerTargetMixin(metaclass=abc.ABCMeta):
         """Actual trigger of the device.
 
         Classes implementing this interface should implement this
-        method instead of :meth:`trigger`.
+        method instead of `trigger`.
 
         """
         raise NotImplementedError()
@@ -263,14 +249,14 @@ class TriggerTargetMixin(metaclass=abc.ABCMeta):
         """Trigger device.
 
         The actual effect is device type dependent.  For example, on a
-        ``Camera`` it triggers image acquisition while on a
+        `Camera` it triggers image acquisition while on a
         `DeformableMirror` it applies a queued pattern.  See
         documentation for the devices implementing this interface for
         details.
 
         Raises:
             microscope.IncompatibleStateError: if trigger type is not
-                set to ``TriggerType.SOFTWARE``.
+                set to `TriggerType.SOFTWARE`.
 
         """
         if self.trigger_type is not microscope.TriggerType.SOFTWARE:
@@ -282,11 +268,18 @@ class TriggerTargetMixin(metaclass=abc.ABCMeta):
 
 
 class Device(metaclass=abc.ABCMeta):
-    """A base device class. All devices should subclass this class."""
+    """A base device class. All devices should subclass this class.
 
-    def __init__(self) -> None:
+    Args:
+        index: the index of the device on a shared library.  This
+            argument is added by the deviceserver.
+
+    """
+
+    def __init__(self, index: typing.Optional[int] = None) -> None:
         self.enabled = False
         self._settings: typing.Dict[str, _Setting] = {}
+        self._index = index
 
     def __del__(self) -> None:
         self.shutdown()
@@ -453,7 +446,6 @@ class Device(metaclass=abc.ABCMeta):
 
     def get_all_settings(self):
         """Return ordered settings as a list of dicts."""
-
         # Fetching some settings may fail depending on device state.
         # Report these values as 'None' and continue fetching other settings.
         def catch(f):
@@ -596,6 +588,7 @@ class DataDevice(Device, metaclass=abc.ABCMeta):
         device specific code in `_do_enable`.
 
         """
+        print("Enable called")
         _logger.debug("Enabling ...")
         # Call device-specific code.
         try:
@@ -605,29 +598,26 @@ class DataDevice(Device, metaclass=abc.ABCMeta):
             self.enabled = False
             raise err
         if not result:
-            _logger.warning("Failed to enable but no error was raised")
             self.enabled = False
         else:
             self.enabled = True
+            # Set up data fetching
             if self._using_callback:
-                _logger.debug("Setup with callback, disabling fetch thread")
                 if self._fetch_thread:
                     self._fetch_thread_run = False
             else:
-                _logger.debug("Setting up fetch thread")
                 if not self._fetch_thread or not self._fetch_thread.is_alive():
+                    print("Calling fetch loop")
                     self._fetch_thread = Thread(target=self._fetch_loop)
                     self._fetch_thread.daemon = True
                     self._fetch_thread.start()
-
-            if self._dispatch_thread and self._dispatch_thread.is_alive():
-                _logger.debug("Found live dispatch thread.")
-            else:
-                _logger.debug("Setting up dispatch thread")
+            if (
+                not self._dispatch_thread
+                or not self._dispatch_thread.is_alive()
+            ):
                 self._dispatch_thread = Thread(target=self._dispatch_loop)
                 self._dispatch_thread.daemon = True
                 self._dispatch_thread.start()
-
             _logger.debug("... enabled.")
 
     def disable(self) -> None:
@@ -639,10 +629,8 @@ class DataDevice(Device, metaclass=abc.ABCMeta):
         self.enabled = False
         if self._fetch_thread:
             if self._fetch_thread.is_alive():
-                _logger.debug("Found fetch thread alive. Joining.")
                 self._fetch_thread_run = False
                 self._fetch_thread.join()
-            _logger.debug("Fetch thread is dead.")
         super().disable()
 
     @abc.abstractmethod
@@ -657,7 +645,7 @@ class DataDevice(Device, metaclass=abc.ABCMeta):
         data is available, return `None`.
 
         """
-        raise NotImplementedError()
+        return None
 
     def _process_data(self, data):
         """Do any data processing and return data."""
@@ -665,7 +653,6 @@ class DataDevice(Device, metaclass=abc.ABCMeta):
 
     def _send_data(self, client, data, timestamp):
         """Dispatch data to the client."""
-        _logger.debug("sending data to client")
         try:
             # Cockpit will send a client with receiveData and expects
             # two arguments (data and timestamp).  But we really want
@@ -691,10 +678,8 @@ class DataDevice(Device, metaclass=abc.ABCMeta):
     def _dispatch_loop(self) -> None:
         """Process data and send results to any client."""
         while True:
-            _logger.debug("Getting data from dispatch buffer")
             client, data, timestamp = self._dispatch_buffer.get(block=True)
             if client not in self._liveClients:
-                _logger.debug("Client not in liveClients so ignoring data.")
                 continue
             err = None
             if isinstance(data, Exception):
@@ -721,8 +706,8 @@ class DataDevice(Device, metaclass=abc.ABCMeta):
         self._fetch_thread_run = True
 
         while self._fetch_thread_run:
-            _logger.debug("Fetching data from device.")
             try:
+                print("calling fetch data from fetch loop")
                 data = self._fetch_data()
             except Exception as e:
                 _logger.error("in _fetch_loop:", exc_info=e)
@@ -732,12 +717,10 @@ class DataDevice(Device, metaclass=abc.ABCMeta):
                 self._put(e, timestamp)
                 data = None
             if data is not None:
-                _logger.debug("Fetch data to be put into dispatch buffer.")
                 # TODO Add support for timestamp from hardware.
                 timestamp = time.time()
                 self._put(data, timestamp)
             else:
-                _logger.debug("Fetched no data from device.")
                 time.sleep(0.001)
 
     @property
@@ -836,8 +819,14 @@ class Camera(TriggerTargetMixin, DataDevice):
 
     """
 
+    ALLOWED_TRANSFORMS = [p for p in itertools.product(*3 * [[False, True]])]
+
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
+        # A list of readout mode descriptions.
+        self._readout_modes = ["default"]
+        # The index of the current readout mode.
+        self._readout_mode = 0
         # Transforms to apply to data (fliplr, flipud, rot90)
         # Transform to correct for readout order.
         self._readout_transform = (False, False, False)
@@ -845,6 +834,21 @@ class Camera(TriggerTargetMixin, DataDevice):
         self._client_transform = (False, False, False)
         # Result of combining client and readout transforms
         self._transform = (False, False, False)
+        # A transform provided by the client.
+        self.add_setting(
+            "transform",
+            "enum",
+            lambda: Camera.ALLOWED_TRANSFORMS.index(self._transform),
+            lambda index: self.set_transform(Camera.ALLOWED_TRANSFORMS[index]),
+            Camera.ALLOWED_TRANSFORMS,
+        )
+        self.add_setting(
+            "readout mode",
+            "enum",
+            lambda: self._readout_mode,
+            self.set_readout_mode,
+            lambda: self._readout_modes,
+        )
         self.add_setting("roi", "tuple", self.get_roi, self.set_roi, None)
 
     def _process_data(self, data):
@@ -864,30 +868,31 @@ class Camera(TriggerTargetMixin, DataDevice):
         }[flips](data)
         return super()._process_data(data)
 
-    def get_transform(self) -> typing.Tuple[bool, bool, bool]:
+    def set_readout_mode(self, description):
+        """Set the readout mode and _readout_transform."""
+        pass
+
+    def get_transform(self):
         """Return the current transform without readout transform."""
         return self._client_transform
 
-    def _update_transform(self):
-        """Update transform (after setting the client or readout transform)."""
+    def set_transform(self, transform):
+        """Combine provided transform with readout transform."""
+        if isinstance(transform, str):
+            transform = literal_eval(transform)
+        self._client_transform = transform
         lr, ud, rot = (
-            self._readout_transform[i] ^ self._client_transform[i]
-            for i in range(3)
+            self._readout_transform[i] ^ transform[i] for i in range(3)
         )
         if self._readout_transform[2] and self._client_transform[2]:
             lr = not lr
             ud = not ud
         self._transform = (lr, ud, rot)
 
-    def set_transform(self, transform: typing.Tuple[bool, bool, bool]) -> None:
-        """Set client transform and update resultant transform."""
-        self._client_transform = transform
-        self._update_transform()
-
     def _set_readout_transform(self, new_transform):
-        """Set readout transform and update resultant transform."""
+        """Update readout transform and update resultant transform."""
         self._readout_transform = [bool(int(t)) for t in new_transform]
-        self._update_transform()
+        self.set_transform(self._client_transform)
 
     @abc.abstractmethod
     def set_exposure_time(self, value: float) -> None:
@@ -949,7 +954,7 @@ class Camera(TriggerTargetMixin, DataDevice):
         raise NotImplementedError()
 
     def get_roi(self) -> microscope.ROI:
-        """Return current ROI."""
+        """Return current ROI. """
         roi = self._get_roi()
         if self._transform[2]:
             # 90 degree rotation
@@ -979,6 +984,16 @@ class Camera(TriggerTargetMixin, DataDevice):
             roi = microscope.ROI(left, top, width, height)
         return self._set_roi(roi)
 
+    def get_trigger_type(self):
+        """Return the current trigger mode.
+
+        One of
+            TRIGGER_AFTER,
+            TRIGGER_BEFORE or
+            TRIGGER_DURATION (bulb exposure.)
+        """
+        pass
+
 
 class SerialDeviceMixin(metaclass=abc.ABCMeta):
     """Mixin for devices that are controlled via serial.
@@ -1004,7 +1019,8 @@ class SerialDeviceMixin(metaclass=abc.ABCMeta):
         self._comms_lock = threading.RLock()
 
     def _readline(self) -> bytes:
-        """Read a line from connection without leading and trailing whitespace."""
+        """Read a line from connection without leading and trailing whitespace.
+        """
         return self.connection.readline().strip()
 
     def _write(self, command: bytes) -> int:
@@ -1258,6 +1274,16 @@ class FilterWheel(Device, metaclass=abc.ABCMeta):
                 "positions must be a positive number (was %d)" % positions
             )
         self._positions = positions
+        # The position as an integer.
+        # Deprecated: clients should call get_position and set_position;
+        # still exposed as a setting until cockpit uses set_position.
+        self.add_setting(
+            "position",
+            "int",
+            self.get_position,
+            self.set_position,
+            lambda: (0, self.get_num_positions()),
+        )
 
     @property
     def n_positions(self) -> int:
@@ -1266,7 +1292,7 @@ class FilterWheel(Device, metaclass=abc.ABCMeta):
 
     @property
     def position(self) -> int:
-        """Filter Wheel position (zero-based)."""
+        """Number of wheel positions (zero-based)."""
         return self._do_get_position()
 
     @position.setter
@@ -1376,7 +1402,7 @@ class Stage(Device, metaclass=abc.ABCMeta):
     .. code-block:: python
 
         stage = SomeStageDevice()
-        stage.enable()  # may trigger a stage move
+        stage.enable() # may trigger a stage move
 
         # move operations
         stage.move_to({'x': 42.0, 'y': -5.1})
@@ -1427,7 +1453,7 @@ class Stage(Device, metaclass=abc.ABCMeta):
 
     Some stages need to find a reference position, home, before being
     able to be moved.  If required, this happens automatically during
-    :func:`enable` (see also :func:`may_move_on_enable`).
+    :func:`enable`.
     """
 
     @property
@@ -1445,32 +1471,6 @@ class Stage(Device, metaclass=abc.ABCMeta):
         given a stage with optional axes the missing axes will *not*
         appear on the returned dict with a value of `None` or some
         other special `StageAxis` instance.
-        """
-        raise NotImplementedError()
-
-    @abc.abstractmethod
-    def may_move_on_enable(self) -> bool:
-        """Whether calling :func:`enable` is likely to make the stage move.
-
-        Most stages need to be driven to their limits at startup to
-        find a repeatable zero position and sometimes to find their
-        limits as well.  This is typically called "homing".
-
-        Stages that need to "home" differ on how often they need it
-        but they only do it during :func:`enable`.  They may need to
-        move each time `enable` is called, the first time after the
-        `Stage` object has been created, or even only the first time
-        since the device was powered up.
-
-        Note the "*may*" on "may_move_on_enable".  This is because it
-        can be difficult to know for certain if `enable` will cause
-        the stage to home.  Still, knowing that the stage *may* move
-        is essential for safety.  An unexpected movement of the stage,
-        particularly large movements such as moving to the stage
-        limits, can destroy a sample on the stage --- or even worse,
-        it can damage an objective or the stage itself.  When in
-        doubt, implementations should return `True`.
-
         """
         raise NotImplementedError()
 
@@ -1556,168 +1556,4 @@ class Stage(Device, metaclass=abc.ABCMeta):
         stage will move until the axes limit.
 
         """
-        raise NotImplementedError()
-
-
-class DigitalIO(DataDevice, metaclass=abc.ABCMeta):
-    """ABC for digital IO devices.
-
-    Digital IO devices (DIO) have a number of digital lines that can
-    be for output, or optionally input, and can switch between an On
-    and Off state.
-
-    Args:
-        numLines: total number of digital lines numbers 0 to n-1.
-
-    """
-
-    def __init__(self, numLines: int, **kwargs) -> None:
-        super().__init__(**kwargs)
-        if numLines < 1:
-            raise ValueError(
-                "NumLines must be a positive number (was %d)" % positions
-            )
-        self._numLines = numLines
-
-        # array to map wether lines are input or output
-        # true is output, start with all lines defined for output.
-        self._IOMap = [True] * self._numLines
-
-    def get_num_lines(self):
-        """Returns the number of IO lines present in this device."""
-        return self._numLines
-
-    @abc.abstractmethod
-    def set_IO_state(self, line: int, state: bool):
-        """Sets the state of a single digital line to either Output or Input.
-
-        Args:
-            line: the line to have its mode set.
-            state: ``True`` for Output or ``False`` for Input.
-        """
-        raise NotImplementedError()
-
-    @abc.abstractmethod
-    def get_IO_state(self, line):
-        """Returns the state of a single digital line, either Output or Input.
-
-        Args:
-            line: The line to have its mode set.
-
-        Returns:
-            Value is ``True`` for Output and ``False`` for Input.
-        """
-        raise NotImplementedError()
-
-    def set_all_IO_state(self, stateArray):
-        """Sets the state of all lines to either Input or Output
-
-        Args:
-            line: The line to have its mode set.
-            stateArray: Boolean array for the lines, ``True`` in
-                output ``False`` is Input.
-
-        """
-        for i, state in enumerate(stateArray):
-            # set each line as defined in stateArray
-            self.set_IO_state(i, state)
-
-    def get_all_IO_state(self):
-        """Returns the state of a all digital line, either Output or Input.
-
-        Returns:
-            A boolean array one entry for each line, ``True`` for
-            Output and ``False`` for Input.
-
-        """
-        stateArray = [None] * self._numLines
-        for i in range(self._numLines):
-            stateArray[i] = self.get_IO_state(i)
-        return stateArray
-
-    @abc.abstractmethod
-    def write_line(self, line, ouput):
-        """Sets the level of a single output line
-
-        Args:
-            line: the line to be set
-            output: the level ``True`` for high and ``False`` for low.
-        """
-
-        raise NotImplementedError()
-
-    def write_all_lines(self, ouput_array):
-        """Sets the output level of every output line.
-
-        Args:
-            output_array: Boolean array of output states ``True`` for
-                high, ``False`` for low, array entries for lines set
-                as inputs are ignored.
-        """
-        if len(ouput_array) != self._numLines:
-            raise ("Output array must be numLines in length")
-        for i in range(self._numLines):
-            # set line i to the IOMap entry, true for output false for input.
-            if self._IOMap[i]:
-                self.write_line(i, ouput_array[i])
-
-    @abc.abstractmethod
-    def read_line(self, line):
-        """Read a single input line.
-
-        Args:
-            line: the line to read
-
-        Returns:
-            A boolean of the line state.
-        """
-        raise NotImplementedError()
-
-    def read_all_lines(self):
-        """Read all the input lines.
-
-        Returns:
-            Boolean array with outline entries set to ``None``.
-        """
-        readarray = [None] * self._numLines
-        for i in range(self._numLines):
-            readarray[i] = self.read_line(i)
-        return readarray
-
-
-class ValueLogger(DataDevice, metaclass=abc.ABCMeta):
-    """ABC for Value logging device.
-
-    Value logging devices utilise the :class:`DataDevice`
-    infrastrucrure to send values to a receiving client.  A typical
-    example of data is temperature measurements.
-
-    Args:
-        numSensors: total number of measurements.
-
-    """
-
-    def __init__(self, numSensors: int, pullData: bool, **kwargs) -> None:
-        super().__init__(**kwargs)
-        if numSensors < 1:
-            raise ValueError(
-                "NumSensors must be a positive number (was %d)" % numSensors
-            )
-        self._numSensors = numSensors
-        # If pull data is True data will be pulled from the server if False
-        # data will be pushed from microsocpe (default)
-        self.pullData = pullData
-
-    @abc.abstractmethod
-    def initialize(self):
-        """Inialize sensors to start sending data back."""
-        raise NotImplementedError()
-
-    def get_num_sensors(self):
-        """Returns the number of sensors lines present in this instance."""
-        return self._numSensors
-
-    @abc.abstractmethod
-    def getValues(self):
-        """Returns values from all sensors"""
         raise NotImplementedError()

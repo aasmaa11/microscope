@@ -19,18 +19,14 @@
 
 import logging
 import multiprocessing
-import os
 import os.path
-import signal
 import tempfile
 import time
 import unittest
 import unittest.mock
 
 import Pyro4
-import Pyro4.errors
 
-import microscope.abc
 import microscope.clients
 import microscope.device_server
 from microscope.testsuite.devices import (
@@ -39,16 +35,6 @@ from microscope.testsuite.devices import (
     TestFilterWheel,
     TestFloatingDevice,
 )
-
-
-class ExposePIDDevice(microscope.abc.Device):
-    """Test device for testing the device server keep alive."""
-
-    def _do_shutdown(self) -> None:
-        pass
-
-    def get_pid(self) -> int:
-        return os.getpid()
 
 
 class DeviceServerExceptionQueue(microscope.device_server.DeviceServer):
@@ -84,7 +70,7 @@ def _patch_out_device_server_logs(func):
         return logging.NullHandler()
 
     no_file = unittest.mock.patch(
-        "microscope.device_server.FileHandler", null_logs
+        "microscope.device_server.RotatingFileHandler", null_logs
     )
     no_stream = unittest.mock.patch(
         "microscope.device_server.StreamHandler", null_logs
@@ -109,17 +95,10 @@ class BaseTestServeDevices(unittest.TestCase):
 
     @_patch_out_device_server_logs
     def setUp(self):
-        options = microscope.device_server.DeviceServerOptions(
-            config_fpath="",
-            logging_level=logging.INFO,
-            logging_dir="",
-        )
         self.p = multiprocessing.Process(
-            target=microscope.device_server.serve_devices,
-            args=(self.DEVICES, options),
+            target=microscope.device_server.serve_devices, args=(self.DEVICES,)
         )
         self.p.start()
-        time.sleep(1)
 
     def tearDown(self):
         self.p.terminate()
@@ -145,13 +124,12 @@ class BaseTestDeviceServer(unittest.TestCase):
         self.queue = multiprocessing.Queue()
         self.process = DeviceServerExceptionQueue(self.queue, *self.args)
         self.process.start()
-        time.sleep(1)
 
     def tearDown(self):
         self.process.terminate()
         self.process.join(self.TIMEOUT)
-        self.assertIsNotNone(
-            self.process.exitcode, "deviceserver not dead after SIGTERM"
+        self.assertFalse(
+            self.process.is_alive(), "deviceserver not dead after SIGTERM"
         )
 
 
@@ -167,6 +145,7 @@ class TestStarting(BaseTestServeDevices):
 
     def test_standard(self):
         """Simplest case, start and exit, given enough time to start all devices"""
+        time.sleep(2)
         self.assertTrue(self.p.is_alive(), "service dies at start")
 
     def test_immediate_interrupt(self):
@@ -177,6 +156,7 @@ class TestStarting(BaseTestServeDevices):
 class TestInputCheck(BaseTestServeDevices):
     def test_empty_devices(self):
         """Check behaviour if there are no devices."""
+        time.sleep(2)
         self.assertTrue(
             not self.p.is_alive(), "not dying for empty list of devices"
         )
@@ -205,6 +185,7 @@ class TestClashingArguments(BaseTestServeDevices):
     ]
 
     def test_port_conflict(self):
+        time.sleep(2)
         client = microscope.clients.Client(
             "PYRO:DeviceWithPort@127.0.0.1:8000"
         )
@@ -238,23 +219,6 @@ class TestConfigLoader(unittest.TestCase):
         self._test_load_source("foobar")
 
 
-class TestFloatingDeviceIndexInjection(BaseTestServeDevices):
-    DEVICES = [
-        microscope.device_server.device(
-            TestFloatingDevice, "127.0.0.1", 8001, {"uid": "foo"}, uid="foo"
-        ),
-        microscope.device_server.device(
-            TestFloatingDevice, "127.0.0.1", 8002, {"uid": "bar"}, uid="bar"
-        ),
-    ]
-
-    def test_injection_of_index_kwarg(self):
-        floating_1 = Pyro4.Proxy("PYRO:TestFloatingDevice@127.0.0.1:8001")
-        floating_2 = Pyro4.Proxy("PYRO:TestFloatingDevice@127.0.0.1:8002")
-        self.assertEqual(floating_1.get_index(), 0)
-        self.assertEqual(floating_2.get_index(), 1)
-
-
 class TestServingFloatingDevicesWithWrongUID(BaseTestDeviceServer):
     # This test will create a floating device with a UID different
     # (foo) than what appears on the config (bar).  This is what
@@ -263,19 +227,7 @@ class TestServingFloatingDevicesWithWrongUID(BaseTestDeviceServer):
     # one is served instead (foo).  See issue #153.
     args = [
         microscope.device_server.device(
-            TestFloatingDevice,
-            "127.0.0.1",
-            8001,
-            # The index kwarg is typically injected by serve_devices
-            # but here we're only testing DeviceServer so we need to
-            # do it ourselves.
-            {"uid": "foo", "index": 0},
-            uid="bar",
-        ),
-        microscope.device_server.DeviceServerOptions(
-            config_fpath="",
-            logging_level=logging.INFO,
-            logging_dir="",
+            TestFloatingDevice, "127.0.01", 8001, {"uid": "foo"}, uid="bar"
         ),
         {"bar": "127.0.0.1"},
         {"bar": 8001},
@@ -283,7 +235,8 @@ class TestServingFloatingDevicesWithWrongUID(BaseTestDeviceServer):
     ]
 
     def test_fail_with_wrong_uid(self):
-        """DeviceServer fails if it gets a FloatingDevice with another UID"""
+        """DeviceServer fails if it gets a FloatingDevice with another UID """
+        time.sleep(1)
         self.assertFalse(
             self.process.is_alive(),
             "expected DeviceServer to have errored and be dead",
@@ -306,11 +259,6 @@ class TestFunctionInDeviceDefinition(BaseTestDeviceServer):
             "localhost",
             8001,
         ),
-        microscope.device_server.DeviceServerOptions(
-            config_fpath="",
-            logging_level=logging.INFO,
-            logging_dir="",
-        ),
         {},
         {},
         multiprocessing.Event(),
@@ -318,40 +266,12 @@ class TestFunctionInDeviceDefinition(BaseTestDeviceServer):
 
     def test_function_in_device_definition(self):
         """Function that constructs multiple devices in device definition"""
+        time.sleep(1)
         self.assertTrue(self.process.is_alive())
         dm1 = Pyro4.Proxy("PYRO:dm1@127.0.0.1:8001")
         dm2 = Pyro4.Proxy("PYRO:dm2@127.0.0.1:8001")
         self.assertEqual(dm1.n_actuators, 10)
         self.assertEqual(dm2.n_actuators, 20)
-
-
-class TestKeepDeviceServerAlive(BaseTestServeDevices):
-    DEVICES = [
-        microscope.device_server.device(
-            ExposePIDDevice, "127.0.0.1", 8001, {}
-        ),
-    ]
-
-    @unittest.skipUnless(
-        hasattr(signal, "SIGKILL"),
-        "can't test if we can't kill subprocess (windows)",
-    )
-    def test_keep_alive(self):
-        device = Pyro4.Proxy("PYRO:ExposePIDDevice@127.0.0.1:8001")
-        initial_pid = device.get_pid()
-
-        os.kill(initial_pid, signal.SIGKILL)
-
-        with self.assertRaises(Pyro4.errors.ConnectionClosedError):
-            device.get_pid()
-
-        # The device server checks every 5 seconds for a crashed
-        # device server so give it 6 seconds.
-        time.sleep(6)
-
-        device._pyroReconnect(tries=1)
-        new_pid = device.get_pid()
-        self.assertNotEqual(initial_pid, new_pid)
 
 
 if __name__ == "__main__":

@@ -144,7 +144,6 @@ import numpy as np
 import Pyro4
 
 import microscope
-import microscope._utils
 import microscope.abc
 
 
@@ -675,18 +674,16 @@ class md_frame(ctypes.Structure):
     ]
 
 
-if os.name == "nt":  # is windows
+if os.name in ("nt", "ce"):
     if platform.architecture()[0] == "32bit":
-        _lib = microscope._utils.library_loader("pvcam32", ctypes.WinDLL)
+        _lib = ctypes.WinDLL("pvcam32")
     else:
-        _lib = microscope._utils.library_loader("pvcam64", ctypes.WinDLL)
+        _lib = ctypes.WinDLL("pvcam64")
 else:
-    _lib = microscope._utils.library_loader("pvcam.so")
-
+    _lib = ctypes.CDLL("pvcam.so")
 
 ### Functions ###
 STRING = ctypes.c_char_p
-
 
 # classes so that we do some magic and automatically add byrefs etc ... can classify outputs
 # (Nicked from PYME's Ixon wrapper.)
@@ -842,15 +839,7 @@ dllFunc(
     ["can_num", "cam_name"],
     buf_len=CAM_NAME_LEN,
 )
-dllFunc(
-    "pl_cam_get_total",
-    [
-        OUTPUT(int16),
-    ],
-    [
-        "total_cams",
-    ],
-)
+dllFunc("pl_cam_get_total", [OUTPUT(int16),], ["total_cams",])
 dllFunc(
     "pl_cam_open",
     [STRING, OUTPUT(int16), int16],
@@ -901,13 +890,7 @@ dllFunc(
     [int16, uns32, uns32, OUTPUT(uns32)],
     ["hcam", "param_id", "index", "length"],
 )
-dllFunc(
-    "pl_pp_reset",
-    [
-        int16,
-    ],
-    ["hcam"],
-)
+dllFunc("pl_pp_reset", [int16,], ["hcam"])
 dllFunc(
     "pl_create_smart_stream_struct",
     [OUTPUT(smart_stream_type), uns16],
@@ -915,28 +898,16 @@ dllFunc(
 )
 dllFunc(
     "pl_release_smart_stream_struct",
-    [
-        ctypes.POINTER(smart_stream_type),
-    ],
-    [
-        "pSmtStruct",
-    ],
+    [ctypes.POINTER(smart_stream_type),],
+    ["pSmtStruct",],
 )
 dllFunc(
-    "pl_create_frame_info_struct",
-    [
-        OUTPUT(FRAME_INFO),
-    ],
-    ["pNewFrameInfo"],
+    "pl_create_frame_info_struct", [OUTPUT(FRAME_INFO),], ["pNewFrameInfo"]
 )
 dllFunc(
     "pl_release_frame_info_struct",
-    [
-        ctypes.POINTER(FRAME_INFO),
-    ],
-    [
-        "pFrameInfoToDel",
-    ],
+    [ctypes.POINTER(FRAME_INFO),],
+    ["pFrameInfoToDel",],
 )
 dllFunc("pl_exp_abort", [int16, int16], ["hcam", "cam_state"])
 dllFunc(
@@ -1145,9 +1116,10 @@ STATUS_STRINGS = {
 class TriggerMode:
     """A microscope trigger mode using PVCAM PMODES."""
 
-    def __init__(self, label, pv_mode):
+    def __init__(self, label, pv_mode, microscope_mode):
         self.label = label
         self.pv_mode = pv_mode
+        self.microscope_mode = microscope_mode
 
     def __repr__(self):
         return "<%s: '%s'>" % (type(self).__name__, self.label)
@@ -1165,29 +1137,29 @@ class TriggerMode:
 
 # Trigger mode definitions.
 TRIGGER_MODES = {
-    TRIG_SOFT: TriggerMode("software", TIMED_MODE),
-    TRIG_TIMED: TriggerMode("timed", TIMED_MODE),
-    TRIG_VARIABLE: TriggerMode("variable timed", VARIABLE_TIMED_MODE),
-    TRIG_FIRST: TriggerMode("trig. first", TRIGGER_FIRST_MODE),
-    TRIG_STROBED: TriggerMode("strobed", STROBED_MODE),
-    TRIG_BULB: TriggerMode("bulb", BULB_MODE),
+    TRIG_SOFT: TriggerMode(
+        "software", TIMED_MODE, microscope.abc.TRIGGER_SOFT
+    ),
+    TRIG_TIMED: TriggerMode("timed", TIMED_MODE, -1),
+    TRIG_VARIABLE: TriggerMode("variable timed", VARIABLE_TIMED_MODE, -1),
+    TRIG_FIRST: TriggerMode(
+        "trig. first", TRIGGER_FIRST_MODE, microscope.abc.TRIGGER_BEFORE,
+    ),
+    TRIG_STROBED: TriggerMode(
+        "strobed", STROBED_MODE, microscope.abc.TRIGGER_BEFORE
+    ),
+    TRIG_BULB: TriggerMode("bulb", BULB_MODE, microscope.abc.TRIGGER_DURATION),
 }
 
 PV_MODE_TO_TRIGGER = {
     TRIG_SOFT: (microscope.TriggerType.SOFTWARE, microscope.TriggerMode.ONCE),
-    # Microscope and PVCam use mode strobe for very different things,
-    # check with the PVCam manual carefully.  PVCam's STROBED_MODE
-    # means that one external trigger starts *each* exposure in a
-    # sequence, which maps to Microscope trigger mode ONCE.  PVCam's
-    # TRIGGER_FIRST_MODE means that one external trigger signals the
-    # start of a sequence.
     TRIG_FIRST: (
         microscope.TriggerType.RISING_EDGE,
-        microscope.TriggerMode.START,
+        microscope.TriggerMode.ONCE,
     ),
     TRIG_STROBED: (
         microscope.TriggerType.RISING_EDGE,
-        microscope.TriggerMode.ONCE,
+        microscope.TriggerMode.STROBE,
     ),
     TRIG_BULB: (
         microscope.TriggerType.RISING_EDGE,
@@ -1230,10 +1202,6 @@ class PVParam:
         self.param_id = param_id
         self.name = _param_to_name[param_id]
         self._pvtype = param_id >> 24 & 255
-        if self.name == "PARAM_READOUT_TIME":
-            # Bugged. Here is what the SDK says: "The parameter type is
-            # incorrectly defined. The actual type is TYPE_UNS32."
-            self._pvtype = TYPE_UNS32
         self.dtype = _dtypemap[self._pvtype]
         self._ctype = _typemap[self._pvtype]
         self.__cache = {}
@@ -1405,8 +1373,7 @@ class PVStringParam(PVParam):
 
 
 class PVCamera(
-    microscope.abc.FloatingDeviceMixin,
-    microscope.abc.Camera,
+    microscope.abc.FloatingDeviceMixin, microscope.abc.Camera,
 ):
     """Implements the CameraDevice interface for the pvcam library."""
 
@@ -1492,12 +1459,6 @@ class PVCamera(
         else:
             self._params[PARAM_EXP_RES].set_value(EXP_RES_ONE_MILLISEC)
             t_exp = int(self.exposure_time * 1e3)
-        # Determine the data type of the buffer
-        # Kinetix has an 8 bit mode, may need more options for colour
-        # cameras.
-        buffer_dtype = "uint16"
-        if self._params[PARAM_BIT_DEPTH].current == 8:
-            buffer_dtype = "uint8"
         # Configure camera, allocate buffer, and register callback.
         if self._trigger == TRIG_SOFT:
             # Software triggering for single frames.
@@ -1531,24 +1492,18 @@ class PVCamera(
                 self.roi.width // self.binning.h,
             )
             self._buffer = np.require(
-                np.empty(buffer_shape, dtype=buffer_dtype),
+                np.zeros(buffer_shape, dtype="uint16"),
                 requirements=["C_CONTIGUOUS", "ALIGNED", "OWNDATA"],
             )
         else:
             # Use a circular buffer.
             self._using_callback = True
 
-            # Determine the data type of the frame
-            frame_type = uns16
-            if buffer_dtype == "uint8":
-                frame_type = uns8
-
             def cb():
                 """Circular buffer mode end-of-frame callback."""
                 timestamp = time.time()
                 frame_p = ctypes.cast(
-                    _exp_get_latest_frame(self.handle),
-                    ctypes.POINTER(frame_type),
+                    _exp_get_latest_frame(self.handle), ctypes.POINTER(uns16)
                 )
                 frame = np.ctypeslib.as_array(
                     frame_p, (self.roi[2], self.roi[3])
@@ -1568,7 +1523,7 @@ class PVCamera(
                 self.roi.width // self.binning.h,
             )
             self._buffer = np.require(
-                np.empty(buffer_shape, dtype=buffer_dtype),
+                np.zeros(buffer_shape, dtype="uint16"),
                 requirements=["C_CONTIGUOUS", "ALIGNED", "OWNDATA"],
             )
             nbytes = _exp_setup_cont(
@@ -1694,7 +1649,6 @@ class PVCamera(
         _logger.info("Initializing %s", self._pv_name)
         self.handle = _cam_open(self._pv_name, OPEN_EXCLUSIVE)
         PVCamera.open_cameras.append(self.handle)
-
         # Set up event callbacks. Tried to use the resume callback to reinit camera
         # after power loss, but any attempt to close/reopen the camera or deinit the
         # DLL throws a Windows Error 0xE06D7363.
@@ -1721,7 +1675,7 @@ class PVCamera(
         )
         # Repopulate _params.
         self._params = {}
-        for param_id, name in _param_to_name.items():
+        for (param_id, name) in _param_to_name.items():
             try:
                 p = PVParam.factory(self, param_id)
             except:
@@ -1781,7 +1735,6 @@ class PVCamera(
         # Populate readout modes by iterating over readout ports and speed
         # table entries.
         ro_ports = self._params[PARAM_READOUT_PORT].values
-        self._readout_mode = 0  # The index of the current readout mode
         self._readout_modes = []
         self._readout_mode_parameters = []
         for i, port in ro_ports.items():
@@ -1810,18 +1763,11 @@ class PVCamera(
                     {"port": i, "spdtab_index": j}
                 )
         # Set to default mode.
-        self._set_readout_mode(self._readout_mode)
-        self.add_setting(
-            "readout mode",
-            "enum",
-            lambda: self._readout_mode,
-            self._set_readout_mode,
-            lambda: self._readout_modes,
-        )
+        self.set_readout_mode(0)
         self._params[PARAM_CLEAR_MODE].set_value(CLEAR_PRE_EXPOSURE_POST_SEQ)
 
     @microscope.abc.keep_acquiring
-    def _set_readout_mode(self, index):
+    def set_readout_mode(self, index):
         """Set the readout mode and transform."""
         params = self._readout_mode_parameters[index]
         self._params[PARAM_READOUT_PORT].set_value(params["port"])
@@ -1854,6 +1800,13 @@ class PVCamera(
         Just return self.cycle_time, which is updated with the real
         value during _do_enable."""
         return self.cycle_time
+
+    def get_trigger_type(self):
+        """Return the current trigger type.
+
+        Deprecated, get the trigger_mode and trigger_type property.
+        """
+        return TRIGGER_MODES[self._trigger].microscope_mode
 
     @Pyro4.oneway
     def soft_trigger(self):

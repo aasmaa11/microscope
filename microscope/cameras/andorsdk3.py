@@ -49,6 +49,15 @@ _logger = logging.getLogger(__name__)
 # SDK data pointer type
 DPTR_TYPE = SDK3.POINTER(SDK3.AT_U8)
 
+# Trigger mode to type.
+TRIGGER_MODES = {
+    "internal": None,
+    "external": microscope.abc.TRIGGER_BEFORE,
+    "external start": None,
+    "external exposure": microscope.abc.TRIGGER_DURATION,
+    "software": microscope.abc.TRIGGER_SOFT,
+}
+
 # Convert from SDK3 trigger mode names to Microscope trigger type and
 # mode.
 SDK3_STRING_TO_TRIGGER = {
@@ -142,7 +151,6 @@ SDK_NAMES = {
     "_vertically_centre_aoi": "VerticallyCentreAOI",
 }
 
-
 # Wrapper to ensure feature is readable.
 def readable_wrapper(func):
     def wrapper(self, *args, **kwargs):
@@ -207,8 +215,7 @@ INVALIDATES_BUFFERS = [
 
 
 class AndorSDK3(
-    microscope.abc.FloatingDeviceMixin,
-    microscope.abc.Camera,
+    microscope.abc.FloatingDeviceMixin, microscope.abc.Camera,
 ):
     SDK_INITIALIZED = False
 
@@ -569,6 +576,10 @@ class AndorSDK3(
             self._sensor_width.get_value(),
             self._sensor_height.get_value(),
         )
+
+    def get_trigger_type(self):
+        # deprecated, use trigger_mode and trigger_type properties
+        return TRIGGER_MODES[self._trigger_mode.get_string().lower()]
 
     def soft_trigger(self):
         # deprecated, use triger()

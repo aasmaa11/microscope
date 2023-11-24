@@ -2,7 +2,6 @@
 
 ## Copyright (C) 2020 David Miguel Susano Pinto <carandraug@gmail.com>
 ## Copyright (C) 2020 Mick Phillips <mick.phillips@gmail.com>
-## Copyright (C) 2022 Ian Dobbie <ian.dobbie@gmail.com>
 ##
 ## This file is part of Microscope.
 ##
@@ -27,11 +26,9 @@ hardware behaviour.  They implement the different ABC.
 """
 
 import logging
-import math
 import random
 import time
 import typing
-from typing import Tuple
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
@@ -42,12 +39,6 @@ import microscope.abc
 
 
 _logger = logging.getLogger(__name__)
-
-
-## PIL 9.2 deprecated ImageFont.getsize and PIL 10.0 removed it in
-## favour of ImageFont.getbbox.  When we can require PIL>=9.2, we can
-## remove this (issue #282)
-_IMAGEFONT_HAS_GETBBOX = hasattr(ImageFont.ImageFont, "getbbox")
 
 
 def _theta_generator():
@@ -111,11 +102,7 @@ class _ImageGenerator:
         data = m(width, height, dark, light).astype(d)
         if self.numbering and index is not None:
             text = "%d" % index
-            if _IMAGEFONT_HAS_GETBBOX:
-                size = self._font.getbbox(text)[2:]
-            else:
-                size = self._font.getsize(text)
-            size = tuple(d + 2 for d in size)  # padding
+            size = tuple(d + 2 for d in self._font.getsize(text))
             img = Image.new("L", size)
             ctx = ImageDraw.Draw(img)
             ctx.text((1, 1), text, fill=light)
@@ -151,7 +138,7 @@ class _ImageGenerator:
         y0 = np.random.randint(h)
         xx, yy = np.meshgrid(range(w), range(h))
         return dark + light * np.exp(
-            -((xx - x0) ** 2 + (yy - y0) ** 2) / (2 * sigma**2)
+            -((xx - x0) ** 2 + (yy - y0) ** 2) / (2 * sigma ** 2)
         )
 
     def sawtooth(self, w, h, dark, light):
@@ -167,11 +154,10 @@ class _ImageGenerator:
 class SimulatedCamera(
     microscope._utils.OnlyTriggersOnceOnSoftwareMixin, microscope.abc.Camera
 ):
-    def __init__(self, sensor_shape: Tuple[int, int] = (512, 512), **kwargs):
+    def __init__(self, **kwargs):
         super().__init__(**kwargs)
         # Binning and ROI
-        self._sensor_shape = sensor_shape
-        self._roi = microscope.ROI(0, 0, *sensor_shape)
+        self._roi = microscope.ROI(0, 0, 512, 512)
         self._binning = microscope.Binning(1, 1)
         # Function used to generate test image
         self._image_generator = _ImageGenerator()
@@ -292,7 +278,11 @@ class SimulatedCamera(
         return self._exposure_time
 
     def _get_sensor_shape(self):
-        return self._sensor_shape
+        return (512, 512)
+
+    def get_trigger_type(self):
+        # deprecated, use trigger_type and trigger_mode properties
+        return microscope.abc.TRIGGER_SOFT
 
     def soft_trigger(self):
         # deprecated, use self.trigger()
@@ -477,9 +467,6 @@ class SimulatedStage(microscope.abc.Stage):
     def _do_shutdown(self) -> None:
         pass
 
-    def may_move_on_enable(self) -> bool:
-        return False
-
     @property
     def axes(self) -> typing.Mapping[str, microscope.abc.StageAxis]:
         return self._axes
@@ -491,96 +478,3 @@ class SimulatedStage(microscope.abc.Stage):
     def move_to(self, position: typing.Mapping[str, float]) -> None:
         for name, pos in position.items():
             self.axes[name].move_to(pos)
-
-
-class SimulatedDigitalIO(microscope.abc.DigitalIO):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self._cache = [None] * self._numLines
-        self.testinput = False
-        self.inputtime = time.time()
-
-    def set_IO_state(self, line: int, state: bool) -> None:
-        _logger.info("Line %d set IO state %s" % (line, str(state)))
-        self._IOMap[line] = state
-        if not state:
-            # this is an input so needs to have a definite value,
-            # default to False if not already set. If set leave alone
-            if self._cache[line] == None:
-                self._cache[line] = False
-
-    def get_IO_state(self, line: int) -> bool:
-        return self._IOMap[line]
-
-    def write_line(self, line: int, state: bool):
-        _logger.debug("Line %d set IO state %s" % (line, str(state)))
-        self._cache[line] = state
-
-    def read_line(self, line: int) -> bool:
-        _logger.debug("Line %d returns %s" % (line, str(self._cache[line])))
-        return self._cache[line]
-
-    def _do_shutdown(self) -> None:
-        pass
-
-    # functions required as we are DataDevice returning data to the server.
-    def _fetch_data(self):
-        if (time.time() - self.inputtime) > 5.0:
-            self.testinput = not self.testinput
-            self.inputtime = time.time()
-            _logger.debug("Line %d returns %s" % (3, self.testinput))
-            self._cache[3] = self.testinput
-            return (3, self.testinput)
-        return None
-
-    def abort(self):
-        pass
-
-    def _do_enable(self):
-        return True
-
-
-# DIO still to do:
-# raise exception if writing to a read line and vis-versa
-# raise exception if line <0 or line>num_lines
-# read all lines to return True,Flase if readable and None if an output
-#
-
-
-class SimulatedValueLogger(microscope.abc.ValueLogger):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self._cache = [None] * self._numSensors
-        self.lastDataTime = time.time()
-
-    def initialize(self):
-        # init simulated sensors
-        for i in range(self._numSensors):
-            self._cache[i] = 20 + i
-
-    # functions required as we are DataDevice returning data to the server.
-    def _fetch_data(self):
-        if (time.time() - self.lastDataTime) > 5.0:
-            self.lastDataTime = time.time()
-            return self.getValues()
-        return None
-
-    def getValues(self):
-        for i in range(self._numSensors):
-            self._cache[i] = (
-                19.5
-                + i
-                + 5 * math.sin(self.lastDataTime / 100)
-                + random.random()
-            )
-            _logger.debug("Sensors %d returns %s" % (i, self._cache[i]))
-        return self._cache
-
-    def abort(self):
-        pass
-
-    def _do_enable(self):
-        return True
-
-    def _do_shutdown(self) -> None:
-        pass

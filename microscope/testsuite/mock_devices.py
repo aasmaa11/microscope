@@ -314,7 +314,8 @@ class CoherentSapphireLaserMock(SerialMock):
 
 
 class CoboltLaserMock(SerialMock):
-    """Modelled after a Cobolt Jive laser 561nm."""
+    """Modelled after a Cobolt Jive laser 561nm.
+    """
 
     eol = b"\r"
 
@@ -472,7 +473,8 @@ class CoboltLaserMock(SerialMock):
 
 
 class OmicronDeepstarLaserMock(SerialMock):
-    """Modelled after a TA Deepstar 488nm."""
+    """Modelled after a TA Deepstar 488nm.
+    """
 
     eol = b"\r\n"
 

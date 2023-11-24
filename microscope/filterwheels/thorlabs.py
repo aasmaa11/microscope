@@ -18,7 +18,6 @@
 ## along with Microscope.  If not, see <http://www.gnu.org/licenses/>.
 
 import io
-import string
 import threading
 import warnings
 
@@ -81,36 +80,29 @@ class ThorlabsFilterWheel(microscope.abc.FilterWheel):
 
     def _do_get_position(self):
         # Thorlabs positions start at 1, hence the -1
-        try:
-            return int(self._send_command("pos?")) - 1
-        except TypeError:
-            raise microscope.DeviceError(
-                "Unable to get position of %s", self.__class__.__name__
-            )
+        return int(self._send_command("pos?")) - 1
 
     def _readline(self):
         """Custom _readline to overcome limitations of the serial implementation."""
-        result = []
+        result = [None]
         with self._lock:
-            while not result or result[-1] not in ("\n", ""):
-                char = self.connection.read()
-                # Do not allow lines to be empty.
-                if result or (char not in string.whitespace):
-                    result.append(char)
-        return "".join(result)
+            while result[-1] not in ("\n", ""):
+                result.append(self.connection.read())
+        return "".join(result[1:])
 
     def _send_command(self, command):
         """Send a command and return any result."""
+        result = None
         with self._lock:
             self.connection.write(command + self.eol)
             response = "dummy"
-            while command not in response and ">" not in response:
+            while response not in [command, ""]:
                 # Read until we receive the command echo.
-                response = self._readline().strip()
+                response = self._readline().strip("> \n\r")
             if command.endswith("?"):
                 # Last response was the command. Next is result.
-                return self._readline().strip()
-        return None
+                result = self._readline().strip()
+        return result
 
 
 class ThorlabsFW102C(ThorlabsFilterWheel):

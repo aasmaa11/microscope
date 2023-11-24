@@ -35,19 +35,17 @@ where ``CONFIG-FILEPATH`` is the path for a python file that defines a
 """
 
 import argparse
-import copy
 import importlib.machinery
 import importlib.util
 import logging
 import multiprocessing
-import os.path
 import signal
 import sys
 import time
 import typing
 from collections.abc import Iterable
-from dataclasses import dataclass
-from logging import FileHandler, StreamHandler
+from logging import StreamHandler
+from logging.handlers import RotatingFileHandler
 from threading import Thread
 
 import Pyro4
@@ -186,20 +184,6 @@ class Filter(logging.Filter):
             return False
 
 
-@dataclass(frozen=True)
-class DeviceServerOptions:
-    """Class to define configuration for a device server.
-
-    The different fields map to the different ``device-server``
-    command line options.
-
-    """
-
-    config_fpath: str
-    logging_level: int
-    logging_dir: str
-
-
 def _check_autoproxy_feature() -> None:
     # AUTOPROXY is enabled by default.  If it is disabled there must
     # be a reason so raise an error instead of silently enabling it.
@@ -244,7 +228,6 @@ class DeviceServer(multiprocessing.Process):
 
     Args:
         device_def: definition of the device.
-        options: configuration for the device server.
         id_to_host: host or mapping of device identifiers to hostname.
         id_to_port: map or mapping of device identifiers to port
             number.
@@ -256,14 +239,12 @@ class DeviceServer(multiprocessing.Process):
     def __init__(
         self,
         device_def,
-        options: DeviceServerOptions,
         id_to_host: typing.Mapping[str, str],
         id_to_port: typing.Mapping[str, int],
         exit_event: typing.Optional[multiprocessing.Event] = None,
     ):
         # The device to serve.
         self._device_def = device_def
-        self._options = options
         self._devices: typing.Dict[str, microscope.abc.Device] = {}
         # Where to serve it.
         self._id_to_host = id_to_host
@@ -281,7 +262,6 @@ class DeviceServer(multiprocessing.Process):
         """
         return DeviceServer(
             self._device_def,
-            self._options,
             self._id_to_host,
             self._id_to_port,
             exit_event=self.exit_event,
@@ -303,13 +283,10 @@ class DeviceServer(multiprocessing.Process):
         for handler in list(root_logger.handlers):
             root_logger.removeHandler(handler)
 
-        root_logger.setLevel(self._options.logging_level)
-
         # Later, we'll log to one file per server, with a filename
         # based on a unique identifier for the device. Some devices
         # don't have UIDs available until after initialization, so
         # log to stderr until then.
-
         stderr_handler = StreamHandler(sys.stderr)
         stderr_handler.setFormatter(_create_log_formatter(cls_name))
         root_logger.addHandler(stderr_handler)
@@ -334,8 +311,6 @@ class DeviceServer(multiprocessing.Process):
                     time.sleep(5)
                 else:
                     break
-            # FIXME: if the above never succeds, then local variable
-            # 'device' will now be referenced before assignment.
             self._devices = {cls_name: device}
 
         if cls_is_type and issubclass(cls, FloatingDeviceMixin):
@@ -352,11 +327,8 @@ class DeviceServer(multiprocessing.Process):
 
         pyro_daemon = Pyro4.Daemon(port=port, host=host)
 
-        log_handler = FileHandler(
-            os.path.join(
-                self._options.logging_dir,
-                "%s_%s_%s.log" % (cls_name, host, port),
-            )
+        log_handler = RotatingFileHandler(
+            "%s_%s_%s.log" % (cls_name, host, port)
         )
         log_handler.setFormatter(_create_log_formatter(cls_name))
         root_logger.addHandler(log_handler)
@@ -397,16 +369,10 @@ class DeviceServer(multiprocessing.Process):
                 _logger.error("Failure to shutdown device %s", device, ex)
 
 
-def serve_devices(devices, options: DeviceServerOptions, exit_event=None):
-    # We make changes to `devices` (would be great if we didn't had
-    # to) so make a a copy of it because we don't want to make those
-    # changes on the caller.  See original issue on #211 and PRs #212
-    # and #217 (most discussion happens on #212).
-    devices = copy.deepcopy(devices)
-
+def serve_devices(devices, exit_event=None):
     root_logger = logging.getLogger()
 
-    log_handler = FileHandler("__MAIN__.log")
+    log_handler = RotatingFileHandler("__MAIN__.log")
     log_handler.setFormatter(_create_log_formatter("device-server"))
     root_logger.addHandler(log_handler)
 
@@ -448,10 +414,15 @@ def serve_devices(devices, options: DeviceServerOptions, exit_event=None):
     for dev in devices:
         by_class[dev["cls"]] = by_class.get(dev["cls"], []) + [dev]
 
+    # Group devices by class.
     if not by_class:
-        _logger.warning("No valid devices specified. Maybe an empty list?")
+        _logger.critical("No valid devices specified. Exiting")
+        sys.exit()
 
     for cls, devs in by_class.items():
+        # Keep track of how many of these classes we have set up.
+        # Some SDKs need this information to index devices.
+        count = 0
         # Floating devices are devices that can only be identified
         # after having been initialized, so the constructor will
         # return any device that it supports.  To work around this we
@@ -463,28 +434,21 @@ def serve_devices(devices, options: DeviceServerOptions, exit_event=None):
         uid_to_host = {}
         uid_to_port = {}
         if isinstance(cls, type) and issubclass(cls, FloatingDeviceMixin):
-            # In addition to the maps of uid to host/port, floating
-            # devices SDKs need the number of devices to index them.
-            count = 0
+            # Need to provide maps of uid to host and port.
             for dev in devs:
                 uid = dev["uid"]
                 uid_to_host[uid] = dev["host"]
                 uid_to_port[uid] = dev["port"]
 
-                dev["conf"]["index"] = count
-                count += 1
-
         for dev in devs:
+            dev["conf"]["index"] = count
             servers.append(
                 DeviceServer(
-                    dev,
-                    options,
-                    uid_to_host,
-                    uid_to_port,
-                    exit_event=exit_event,
+                    dev, uid_to_host, uid_to_port, exit_event=exit_event
                 )
             )
             servers[-1].start()
+            count += 1
 
     # Main thread must be idle to process signals correctly, so use another
     # thread to check DeviceServers, restarting them where necessary. Define
@@ -524,16 +488,14 @@ def serve_devices(devices, options: DeviceServerOptions, exit_event=None):
                 # if we add some interface to interactively restart servers.
                 _logger.info("No servers running. Exiting.")
                 exit_event.set()
-            else:
-                try:
-                    time.sleep(5)
-                except (KeyboardInterrupt, IOError):
-                    pass
+            try:
+                time.sleep(5)
+            except (KeyboardInterrupt, IOError):
+                pass
 
     keep_alive_thread = Thread(target=keep_alive)
     keep_alive_thread.start()
 
-    _logger.info("Device Server started. Press Ctrl+C to exit.")
     while not exit_event.is_set():
         try:
             time.sleep(5)
@@ -555,7 +517,7 @@ def serve_devices(devices, options: DeviceServerOptions, exit_event=None):
     return
 
 
-def _parse_cmd_line_args(args: typing.Sequence[str]) -> DeviceServerOptions:
+def _parse_cmd_line_args(args: typing.Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="device-server")
     parser.add_argument(
         "--logging-level",
@@ -566,26 +528,13 @@ def _parse_cmd_line_args(args: typing.Sequence[str]) -> DeviceServerOptions:
         help="Set logging level",
     )
     parser.add_argument(
-        "--logging-dir",
-        action="store",
-        type=str,
-        default="",
-        help="Directory where log files are written to",
-    )
-
-    parser.add_argument(
         "config_fpath",
         action="store",
         type=str,
         metavar="CONFIG-FILEPATH",
         help="Path to the configuration file",
     )
-    parsed = parser.parse_args(args)
-    return DeviceServerOptions(
-        config_fpath=parsed.config_fpath,
-        logging_level=getattr(logging, parsed.logging_level.upper()),
-        logging_dir=parsed.logging_dir,
-    )
+    return parser.parse_args(args)
 
 
 def _load_source(filepath):
@@ -598,20 +547,19 @@ def _load_source(filepath):
 
 def validate_devices(configfile):
     config = _load_source(configfile)
-    try:
-        devices = getattr(config, "DEVICES")
-    except AttributeError:
+    devices = getattr(config, "DEVICES", None)
+    if not devices:
         raise Exception("No 'DEVICES=...' in config file.")
-    if not isinstance(devices, Iterable):
+    elif not isinstance(devices, Iterable):
         raise Exception("Error in config: DEVICES should be an iterable.")
     return devices
 
 
 def main(argv: typing.Sequence[str]) -> int:
-    options = _parse_cmd_line_args(argv[1:])
+    args = _parse_cmd_line_args(argv[1:])
 
     root_logger = logging.getLogger()
-    root_logger.setLevel(options.logging_level)
+    root_logger.setLevel(args.logging_level.upper())
 
     stderr_handler = StreamHandler(sys.stderr)
     stderr_handler.setFormatter(_create_log_formatter("device-server"))
@@ -619,9 +567,9 @@ def main(argv: typing.Sequence[str]) -> int:
 
     root_logger.addFilter(Filter())
 
-    devices = validate_devices(options.config_fpath)
+    devices = validate_devices(args.config_fpath)
 
-    serve_devices(devices, options)
+    serve_devices(devices)
 
     return 0
 

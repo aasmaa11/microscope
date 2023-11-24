@@ -64,7 +64,6 @@ import numpy as np
 from numpy.ctypeslib import ndpointer
 
 import microscope
-import microscope._utils
 import microscope.abc
 
 
@@ -88,10 +87,10 @@ if arch == "32bit":
     _dllName = "atmcd32d"
 else:
     _dllName = "atmcd64d"
-if os.name == "nt":  # is windows
-    _dll = microscope._utils.library_loader(_dllName, ctypes.WinDLL)
+if os.name in ("nt", "ce"):
+    _dll = ctypes.WinDLL(_dllName)
 else:
-    _dll = microscope._utils.library_loader(_dllName + ".so")
+    _dll = ctypes.CDLL(_dllName + ".so")
 
 # Andor's types
 at_32 = c_long
@@ -100,8 +99,6 @@ at_64 = c_longlong
 at_u64 = c_ulonglong
 
 """Version Information Definitions"""
-
-
 # Version information enumeration
 class AT_VersionInfoId(c_int):
     pass
@@ -117,8 +114,6 @@ AT_VERSION_INFO_LEN = 80
 AT_CONTROLLER_CARD_MODEL_LEN = 80
 
 """DDG Lite Definitions"""
-
-
 # Channel enumeration
 class AT_DDGLiteChannelId(c_int):
     pass
@@ -506,7 +501,6 @@ for attrib_name in dir(sys.modules[__name__]):
     if attrib_name.startswith("DRV_"):
         status_codes.update({eval(attrib_name): attrib_name})
 
-
 # The lookup function.
 def lookup_status(code):
     key = code[0] if type(code) is list else code
@@ -518,7 +512,6 @@ def lookup_status(code):
 
 # The following DLL-wrapping classes are largely lifted from David Baddeley's
 # SDK3 wrapper, with some modifications and additions.
-
 
 # Classes used to handle outputs and parameters that need buffers.
 class _meta:
@@ -1369,8 +1362,7 @@ TRIGGER_TO_ATMCD_MODE = {v: k for k, v in ATMCD_MODE_TO_TRIGGER.items()}
 
 
 class AndorAtmcd(
-    microscope.abc.FloatingDeviceMixin,
-    microscope.abc.Camera,
+    microscope.abc.FloatingDeviceMixin, microscope.abc.Camera,
 ):
     """Implements CameraDevice interface for Andor ATMCD library."""
 
@@ -1450,7 +1442,6 @@ class AndorAtmcd(
         """Initialize the library and hardware and create Setting objects."""
         _logger.info("Initializing ...")
         num_cams = GetAvailableCameras()
-        _logger.info("Found %d available cameras", num_cams)
         if self._index >= num_cams:
             msg = "Requested camera %d, but only found %d cameras" % (
                 self._index,
@@ -1727,11 +1718,7 @@ class AndorAtmcd(
         with self:
             exposure, accumulate, kinetic = GetAcquisitionTimings()
             readout = GetReadOutTime()
-            # IMD 20210422 DeepSIM timing is wrong as the keepclear cycles are
-            # not accounted for.
-            # return exposure + readout
-            # This appears to allow the correct time between trigger pulses.
-            return kinetic
+        return exposure + readout
 
     def _set_readout_mode(self, mode_index):
         """Configure channel, amplifier and VS-speed."""
@@ -1756,6 +1743,19 @@ class AndorAtmcd(
         """Return the sensor temperature."""
         with self:
             return GetTemperature()[1]
+
+    def get_trigger_type(self):
+        """Return the microscope.devices trigger type.
+
+        deprecated, use trigger_mode and trigger_type properties.
+        """
+        trig = self.get_setting("TriggerMode")
+        if trig == TriggerMode.BULB:
+            return microscope.abc.TRIGGER_DURATION
+        elif trig == TriggerMode.SOFTWARE:
+            return microscope.abc.TRIGGER_SOFT
+        else:
+            return microscope.abc.TRIGGER_BEFORE
 
     def soft_trigger(self):
         """Send a software trigger signal.

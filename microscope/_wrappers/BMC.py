@@ -24,14 +24,12 @@ import ctypes
 import os
 from ctypes import c_char, c_char_p, c_double, c_int, c_uint, c_uint32
 
-import microscope._utils
 
-
-if os.name == "nt":  # is windows
+if os.name in ("nt", "ce"):
     # Not actually tested yet
-    SDK = microscope._utils.library_loader("BMC2", ctypes.WinDLL)
+    SDK = ctypes.WinDLL("BMC2")
 else:
-    SDK = microscope._utils.library_loader("libBMC.so.3")
+    SDK = ctypes.CDLL("libBMC.so.3")
 
 
 # Definitions from BMCDefs.h
