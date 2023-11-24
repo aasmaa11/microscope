@@ -107,7 +107,8 @@ class SerialConnection:
 class ASIStageAxis(microscope.abc.StageAxis):
 
     def __init__(self, 
-                 axis_name, 
+                 name, 
+                 real_name,
                  upper_limit,
                  lower_limit,
                  serial_connection,
@@ -119,9 +120,13 @@ class ASIStageAxis(microscope.abc.StageAxis):
                  min_precision_um,
                  max_precision_um,
                  encoder_counts_per_um):
-        self.axis_name = axis_name
+        self.axis_name = name
+        self.real_name = real_name
+        
         self.lower_limit = lower_limit
         self.upper_limit = upper_limit
+        print("LOWER LIMIT FOR %s IS = %f"%(self.real_name, float(lower_limit)))
+        print("UPPER LIMIT FOR %s IS = %f"%(self.real_name, float(upper_limit)))
         self.serial_connection = serial_connection
         self.max_velocity_mmps = max_velocity_mmps
         self.min_acceleration_ms = min_acceleration_ms
@@ -140,7 +145,7 @@ class ASIStageAxis(microscope.abc.StageAxis):
         self._moving = False
 
     def _set_velocity(self, velocity_mmps): # tuple i.e. (2, 5, None)
-        print("%s: setting velocity = %s"%(self.name, velocity_mmps))
+        print("%s: setting velocity = %s"%(self.real_name, velocity_mmps))
         #assert len(velocity_mmps) == len(self.axes)
         #for v in velocity_mmps: assert type(v) is int or type(v) is float
         assert type(velocity_mmps) is int or type(velocity_mmps) is float
@@ -148,7 +153,7 @@ class ASIStageAxis(microscope.abc.StageAxis):
 
         assert 0 <= velocity_mmps <= self.max_velocity_mmps
         velocity_mmps = round(velocity_mmps, 6)
-        cmd_string.append('V%s=%0.6f '%(self.name, velocity_mmps))
+        cmd_string.append('V%s=%0.6f '%(self.real_name, velocity_mmps))
 
         self.serial_connection._send(''.join(cmd_string), respond=False)
         print(self._get_velocity())
@@ -156,19 +161,19 @@ class ASIStageAxis(microscope.abc.StageAxis):
         print(velocity_mmps)
         #assert self._get_velocity() == tuple(velocity_mmps)
         assert self._get_velocity() == velocity_mmps
-        print("%s: -> done setting velocity."%self.name)
+        print("%s: -> done setting velocity."%self.real_name)
         return None
 
     def _get_velocity(self):
-        print("%s: getting velocity"%self.name)
+        print("%s: getting velocity"%self.real_name)
         
         varia, self.velocity_mmps = (self.serial_connection._send(
-            'S '+'? '.join(self.name)+'?', parse_axes=True)).split("=")
-        print("%s: -> velocity (mm/s) = %f"%(self.name, float(self.velocity_mmps)))
+            'S '+'? '.join(self.real_name)+'?', parse_axes=True)).split("=")
+        print("%s: -> velocity (mm/s) = %f"%(self.real_name, float(self.velocity_mmps)))
         return float(self.velocity_mmps)
     
     def _set_acceleration(self, acceleration_ms): # tuple i.e. (2, 5, None)
-        print("%s: setting acceleration = %s"%(self.name, acceleration_ms))
+        print("%s: setting acceleration = %s"%(self.real_name, acceleration_ms))
         #assert len(acceleration_ms) == len(self.axes)
         #for v in acceleration_ms: assert type(v) is int or type(v) is float
         assert type(acceleration_ms) is int or type(acceleration_ms) is float
@@ -176,50 +181,50 @@ class ASIStageAxis(microscope.abc.StageAxis):
         acceleration_ms = round(acceleration_ms)
         assert acceleration_ms >= self.min_acceleration_ms
         assert acceleration_ms <= self.max_acceleration_ms
-        cmd_string.append('AC%s=%0.6f '%(self.name, acceleration_ms))
+        cmd_string.append('AC%s=%0.6f '%(self.real_name, acceleration_ms))
 
         self.serial_connection._send(''.join(cmd_string), respond=False)
         assert self._get_acceleration() == acceleration_ms
-        print("%s: -> done setting acceleration."%self.name)
+        print("%s: -> done setting acceleration."%self.real_name)
         return None
 
     def _get_acceleration(self): # acceleration or deceleration ramp time (ms)
-        print("%s: getting acceleration"%self.name)
+        print("%s: getting acceleration"%self.real_name)
         varia, self.acceleration_ms = self.serial_connection._send(
-            'AC '+'? '.join(self.name)+'?', parse_axes=True).split("=")
+            'AC '+'? '.join(self.real_name)+'?', parse_axes=True).split("=")
         print("%s: -> acceleration (ms) = %f"%(
-                self.name, float(self.acceleration_ms)))
+                self.real_name, float(self.acceleration_ms)))
         return float(self.acceleration_ms)
     
     def _set_settle_time(self, settle_time_ms): # tuple i.e. (2, 5, None)
-        print("%s: setting settle time = %s"%(self.name, settle_time_ms))
+        print("%s: setting settle time = %s"%(self.real_name, settle_time_ms))
         #assert len(settle_time_ms) == len(self.axes)
         #for v in settle_time_ms: assert type(v) is int or type(v) is float
         assert type(settle_time_ms) is int or type(settle_time_ms) is float
         cmd_string = ['WT ']
         settle_time_ms = round(settle_time_ms)
         assert 0 <= settle_time_ms <= self.max_settle_time_ms
-        cmd_string.append('WT%s=%0.6f '%(self.name, settle_time_ms))
+        cmd_string.append('WT%s=%0.6f '%(self.real_name, settle_time_ms))
 
         self.serial_connection._send(''.join(cmd_string), respond=False)
         self._get_settle_time()
         self.settle_time_ms = float(self.settle_time_ms)
         assert self.settle_time_ms >= settle_time_ms - self.tol_settle_time_ms
         assert settle_time_ms <= settle_time_ms + self.tol_settle_time_ms
-        print("%s: -> done setting settle_time."%self.name)
+        print("%s: -> done setting settle_time."%self.real_name)
         return None
 
     def _get_settle_time(self): # time spent at end of move (ms)
-        print("%s: getting settle time"%self.name)
+        print("%s: getting settle time"%self.real_name)
         varia, self.settle_time_ms = self.serial_connection._send(
-            'WT '+'? '.join(self.name)+'?', parse_axes=True).split("=")
+            'WT '+'? '.join(self.real_name)+'?', parse_axes=True).split("=")
         print("%s: -> settle time (ms) = %f"%(
-                self.name, float(self.settle_time_ms)))
+                self.real_name, float(self.settle_time_ms)))
         return float(self.settle_time_ms)
     
 
     def _set_precision(self, precision_um): # tuple i.e. (2, 5, None)
-        print("%s: setting precision = %s"%(self.name, precision_um))
+        print("%s: setting precision = %s"%(self.real_name, precision_um))
         #assert len(precision_um) == len(self.axes)
         #for v in precision_um: assert type(v) is int or type(v) is float
         assert type(precision_um) is int or type(precision_um) is float
@@ -229,21 +234,21 @@ class ASIStageAxis(microscope.abc.StageAxis):
         assert precision_um >= self.min_precision_um
         assert precision_um <= self.max_precision_um
         cmd_string.append(
-                'PC%s=%0.6f '%(self.name, 1e-6 * precision_um))
+                'PC%s=%0.6f '%(self.real_name, 1e-6 * precision_um))
         self.serial_connection._send(''.join(cmd_string), respond=False)
         assert self._get_precision() == precision_um
-        print("%s: -> done setting precision."%self.name)
+        print("%s: -> done setting precision."%self.real_name)
         return None
 
 
     def _get_precision(self): # acceptable error between target and actual (um)
-        print("%s: getting precision"%self.name)
+        print("%s: getting precision"%self.real_name)
         varia, precision_mm = self.serial_connection._send(
-            'PC '+'? '.join(self.name)+'?', parse_axes=True).split("=")
+            'PC '+'? '.join(self.real_name)+'?', parse_axes=True).split("=")
         #self.precision_um = tuple(round(1e6 * p) for p in precision_mm)
         self.precision_um = round(1e6 * float(precision_mm))
         print("%s: -> precision (um) = %f"%(
-                self.name, self.precision_um))
+                self.real_name, self.precision_um))
         return self.precision_um
 
     def _counts2position(self, count):
@@ -256,10 +261,10 @@ class ASIStageAxis(microscope.abc.StageAxis):
         return count
 
     def _get_position(self):
-        print("%s: getting position"%self.name)
-        response = self.serial_connection._send('W '+' '.join(self.name)).strip(':A \r\n').split()
+        print("%s: getting position"%self.real_name)
+        response = self.serial_connection._send('W '+' '.join(self.real_name)).strip(':A \r\n').split()
         self.position_um = self._counts2position(response)
-        print("%s: -> position (um) = %f"%(self.name, self.position_um))
+        print("%s: -> position (um) = %f"%(self.real_name, self.position_um))
         return self.position_um
 
     def _finish_moving(self):
@@ -270,11 +275,12 @@ class ASIStageAxis(microscope.abc.StageAxis):
             if status == 'N':
                 break
         self._get_position()
-
+        print("FIRST")
         assert self.position_um >= self._target_move_um - self.precision_um
+        print("SECOND")
         assert self.position_um <= self._target_move_um + self.precision_um
         self._moving = False
-        print('%s: -> finished moving'%self.name)
+        print('%s: -> finished moving'%self.real_name)
         return None
     
     def move_um(self, move_um, relative=True, block=True):
@@ -291,9 +297,9 @@ class ASIStageAxis(microscope.abc.StageAxis):
 
         #move_um = tuple(round(v, 3) for v in move_um) # round to nm
         move_um = round(move_um, 3)
-        print("%s: moving to (um) = %f"%(self.name, move_um))
+        print("%s: moving to (um) = %f"%(self.real_name, move_um))
         cmd_string = ['M ']
-        cmd_string.append('%s=%0.6f '%(self.name,
+        cmd_string.append('%s=%0.6f '%(self.real_name,
                                            self._position2counts(move_um)))
         self.serial_connection._send(''.join(cmd_string), respond=False)
         self._moving = True
@@ -310,6 +316,7 @@ class ASIStageAxis(microscope.abc.StageAxis):
 
     def move_to(self, pos: float) -> None:
         """Move axis to specified position."""
+        print("CALLING MOVE TO FOR %s: moving to = %f"%(self.real_name, pos))
         self.move_um(pos, relative=False, block=True)
         return None
 
@@ -340,6 +347,7 @@ class ASIStage(
     def __init__(self, 
                  which_port,                # COM port for controller
                  axes=None,                 # ('X','Y'), ('Z',), ('X','Y','Z')
+                 piezo_z=True,
                  lead_screws=None,          # 'UC', 'SC', 'S', 'F', 'XF' (tuple)
                  axes_min_mm=None,          # min range (tuple)
                  axes_max_mm=None,          # max range (tuple)
@@ -350,90 +358,99 @@ class ASIStage(
                  very_verbose=False,
                  index: typing.Optional[int] = None) -> None:
         
-        self.enabled = False
-        self._settings: typing.Dict[str, microscope.abc._Setting] = {}
-        self._index = index
+            self.enabled = False
+            self._settings: typing.Dict[str, microscope.abc._Setting] = {}
+            self._index = index
 
-        # set variables used for the Serial connection
-        self.name = name
-        print("setting vebbose")
-        self.verbose = verbose
-        print("after setting vebbose")
-        self.very_verbose = very_verbose
+            # set variables used for the Serial connection
+            self.name = name
+            print("setting verbose")
+            self.verbose = verbose
+            print("after setting verbose")
+            self.very_verbose = very_verbose
 
 
-        # the stage has a serial connection
-        self.serial_connection = SerialConnection(which_port, name)
-        self.serial_connection._set_ttl_in_mode('disabled')
-        self.serial_connection._set_ttl_out_mode('low')
-        
-        # pmw state
-        self.state = None
-        
-        if axes is not None:
-            # check that the name and number of axes are correct
-            assert axes == ('X','Y') or axes == ('Z',) or axes == ('X','Y','Z')
+            # the stage has a serial connection
+            self.serial_connection = SerialConnection(which_port, name)
+            self.serial_connection._set_ttl_in_mode('disabled')
+            self.serial_connection._set_ttl_out_mode('low')
+            
+            # pmw state
+            self.state = None
+            
+            if axes is not None:
+                # check that the name and number of axes are correct
+                assert axes == ('X','Y') or axes == ('Z',) or axes == ('X','Y','Z')
 
-            # check lead screw values 
-            assert lead_screws is not None, 'please choose lead screw options'
-            assert len(lead_screws) == len(axes)
-            screw2value = { # pitch (mm), res (nm), speed (mm/s)
-                'UC':(25.40, 88.0, 28.0),   # 'ultra-course'
-                'SC':(12.70, 44.0, 14.0),   # 'super-course'
-                'S' :(6.350, 22.0, 7.00),   # 'standard'
-                'F' :(1.590, 5.50, 1.75),   # 'fine'
-                'XF':(0.653, 2.20, 0.70)}   # 'extra-fine'
+                # check lead screw values 
+                assert lead_screws is not None, 'please choose lead screw options'
+                assert len(lead_screws) == len(axes)
+                screw2value = { # pitch (mm), res (nm), speed (mm/s)
+                    'UC':(25.40, 88.0, 28.0),   # 'ultra-course'
+                    'SC':(12.70, 44.0, 14.0),   # 'super-course'
+                    'S' :(6.350, 22.0, 7.00),   # 'standard'
+                    'F' :(1.590, 5.50, 1.75),   # 'fine'
+                    'XF':(0.653, 2.20, 0.70)}   # 'extra-fine'
 
-            # set pitch, resolution and max velocity mmps
-            pitch_mm, resolution_nm, max_velocity_mmps = [], [], []
-            for a in range(len(axes)):
-                pitch_mm.append(screw2value[lead_screws[a]][0])
-                resolution_nm.append(screw2value[lead_screws[a]][1])
-                max_velocity_mmps.append(screw2value[lead_screws[a]][2])
-            self.pitch_mm = tuple(pitch_mm)
-            self.resolution_nm = tuple(resolution_nm)
-            self.max_velocity_mmps = tuple(max_velocity_mmps)
+                # set pitch, resolution and max velocity mmps
+                pitch_mm, resolution_nm, max_velocity_mmps = [], [], []
+                for a in range(len(axes)):
+                    pitch_mm.append(screw2value[lead_screws[a]][0])
+                    resolution_nm.append(screw2value[lead_screws[a]][1])
+                    max_velocity_mmps.append(screw2value[lead_screws[a]][2])
+                self.pitch_mm = tuple(pitch_mm)
+                self.resolution_nm = tuple(resolution_nm)
+                self.max_velocity_mmps = tuple(max_velocity_mmps)
 
-            # check if min/max values of axes were passed 
-            assert axes_min_mm is not None, 'please specify min range of axes'
-            assert axes_max_mm is not None, 'please specify max range of axes'
-            # check if there is one mix/max value for each axis
-            assert len(axes_min_mm) == len(axes)
-            assert len(axes_max_mm) == len(axes)
-            # check that the min/max values of axes are int or float
-            for v in axes_min_mm: assert type(v) is int or type(v) is float
-            for v in axes_max_mm: assert type(v) is int or type(v) is float
+                # check if min/max values of axes were passed 
+                assert axes_min_mm is not None, 'please specify min range of axes'
+                assert axes_max_mm is not None, 'please specify max range of axes'
+                # check if there is one mix/max value for each axis
+                assert len(axes_min_mm) == len(axes)
+                assert len(axes_max_mm) == len(axes)
+                # check that the min/max values of axes are int or float
+                for v in axes_min_mm: assert type(v) is int or type(v) is float
+                for v in axes_max_mm: assert type(v) is int or type(v) is float
 
-            self.encoder_counts_per_um = len(axes)*(10,)# default value
-            if encoder_counts_per_um is not None:
-                assert len(encoder_counts_per_um) == len(axes)
-                for v in encoder_counts_per_um: assert type(v) is int
-                self.encoder_counts_per_um = encoder_counts_per_um
+                self.encoder_counts_per_um = len(axes)*(10,)# default value
+                if encoder_counts_per_um is not None:
+                    assert len(encoder_counts_per_um) == len(axes)
+                    for v in encoder_counts_per_um: assert type(v) is int
+                    self.encoder_counts_per_um = encoder_counts_per_um
 
-            axes_temp = []
-            # create instances of ASIStageAxis for each axis
-            for axis_name, axis_min, axis_max, encoder_counts_per_um, max_velocity_mmps in zip(axes, axes_min_mm, axes_max_mm, self.encoder_counts_per_um, self.max_velocity_mmps):
-                print(axis_name)
-                axis = ASIStageAxis(axis_name=axis_name, 
-                 upper_limit=1e3*axis_max,
-                 lower_limit=1e3*axis_min,
-                 serial_connection=self.serial_connection, # same serial connection as the stage
-                 max_velocity_mmps=max_velocity_mmps,
-                 min_acceleration_ms=25,
-                 max_acceleration_ms=1e3,
-                 max_settle_time_ms=1e3,
-                 tol_settle_time_ms=1,
-                 min_precision_um=1,
-                 max_precision_um=1e6,
-                 encoder_counts_per_um=encoder_counts_per_um) 
-                axes_temp.append(axis)
-            self.stage_axes = tuple(axes_temp) # set axes of the stage
+                axes_temp = []
+                real_names = []
+                for axis_name in axes:
+                    if axis_name == 'Z' and piezo_z:
+                        real_names.append('F')
+                    else:
+                        real_names.append(axis_name)
+                # create instances of ASIStageAxis for each axis
+                for axis_name, real_name, axis_min, axis_max, encoder_counts_per_um, max_velocity_mmps in zip(axes, real_names, axes_min_mm, axes_max_mm, self.encoder_counts_per_um, self.max_velocity_mmps):
+                    print(axis_name)
+                    axis = ASIStageAxis(name=axis_name, 
+                    real_name=real_name,
+                    upper_limit=1e3*axis_max,
+                    lower_limit=1e3*axis_min,
+                    serial_connection=self.serial_connection, # same serial connection as the stage
+                    max_velocity_mmps=max_velocity_mmps,
+                    min_acceleration_ms=25,
+                    max_acceleration_ms=1e3,
+                    max_settle_time_ms=1e3,
+                    tol_settle_time_ms=1,
+                    min_precision_um=1,
+                    max_precision_um=1e6,
+                    encoder_counts_per_um=encoder_counts_per_um) 
+                    print("AFTER INSTANTIATING")
+                    axes_temp.append(axis)
+                self.stage_axes = tuple(axes_temp) # set axes of the stage
 
-            self._moving = False
-        if use_pwm:
-            self.set_pwm_state('off')
-            self.set_pwm_intensity(0)
-        return None
+                self._moving = False
+            if use_pwm:
+                
+                self.set_pwm_state('off')
+                self.set_pwm_intensity(0)
+            return None
 
 
     def _do_disable(self):
