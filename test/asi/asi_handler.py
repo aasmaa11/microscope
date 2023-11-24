@@ -25,8 +25,6 @@ import typing
 
 import serial
 
-import microscope._utils
-import microscope.abc
 
 _logger = logging.getLogger(__name__)
 
@@ -104,7 +102,7 @@ class SerialConnection:
 
 
 
-class ASIStageAxis(microscope.abc.StageAxis):
+class ASIStageAxis():
 
     def __init__(self, 
                  name, 
@@ -331,17 +329,13 @@ class ASIStageAxis(microscope.abc.StageAxis):
         return self.axis_name
 
     @property
-    def limits(self) -> microscope.AxisLimits:
+    def limits(self) -> tuple:
         """Upper and lower limits values for position."""
-        limits = microscope.AxisLimits(self.lower_limit, self.upper_limit)
+        limits = (self.lower_limit, self.upper_limit)
         return limits
 
 
-class ASIStage(
-    microscope._utils.OnlyTriggersBulbOnSoftwareMixin,
-    microscope.abc.SerialDeviceMixin,
-    microscope.abc.Stage,
-):
+class ASIStage():
     """ASI Stage."""
     # FUNCTIONS INHERITED FROM DEVICE CLASS
     def __init__(self, 
@@ -359,7 +353,7 @@ class ASIStage(
                  index: typing.Optional[int] = None) -> None:
         
             self.enabled = False
-            self._settings: typing.Dict[str, microscope.abc._Setting] = {}
+            #self._settings: typing.Dict[str, microscope.abc._Setting] = {}
             self._index = index
 
             # set variables used for the Serial connection
@@ -573,7 +567,7 @@ class ASIStage(
 
 
     @property
-    def limits(self) -> typing.Mapping[str, microscope.AxisLimits]:
+    def limits(self) -> typing.Mapping[str, tuple]:
         """Map of axis name to its upper and lower limits.
 
         .. code-block:: python
