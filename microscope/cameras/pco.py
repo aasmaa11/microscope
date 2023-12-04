@@ -57,8 +57,8 @@ class pcoPandaCamera(
         """Return a tuple of `(width, height)` indicating shape in pixels."""
         #Consult pco.camera maybe 
         cam_desc = self.myCam.sdk.get_camera_description()
-        width = cam_desc["max. horizontal resolution standard"]
-        height = cam_desc["max. vertical resolution standard"]
+        width = cam_desc["max width"]
+        height = cam_desc["max height"]
         return (width, height)
     
     def _get_binning(self) -> microscope.Binning:
